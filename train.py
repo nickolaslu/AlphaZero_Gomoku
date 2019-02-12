@@ -16,6 +16,9 @@ from policy_value_net import PolicyValueNet  # Theano and Lasagne
 # from policy_value_net_pytorch import PolicyValueNet  # Pytorch
 # from policy_value_net_tensorflow import PolicyValueNet # Tensorflow
 # from policy_value_net_keras import PolicyValueNet # Keras
+import logging
+import os
+import datetime
 
 
 class TrainPipeline():
@@ -46,11 +49,28 @@ class TrainPipeline():
         # num of simulations used for the pure mcts, which is used as
         # the opponent to evaluate the trained policy
         self.pure_mcts_playout_num = 1000
+        # add output log
+        self.formatter = logging.Formatter('%(asctime)s [%(module)s] %(levelname)s: %(message)s', '%Y-%m-%d %H:%M:%S')
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(level=logging.INFO)
+        self.handler = logging.FileHandler("output.log")
+        self.handler.setLevel(logging.INFO)
+        self.handler.setFormatter(self.formatter)
+        self.console = logging.StreamHandler()
+        self.console.setLevel(logging.INFO)
+        self.console.setFormatter(self.formatter)
+        self.logger.addHandler(self.handler)
+        self.logger.addHandler(self.console)
+        
         if init_model:
-            # start training from an initial policy-value net
-            self.policy_value_net = PolicyValueNet(self.board_width,
-                                                   self.board_height,
-                                                   model_file=init_model)
+            if os.path.exists(init_model):
+                # start training from an initial policy-value net
+                self.policy_value_net = PolicyValueNet(self.board_width,
+                                                       self.board_height,
+                                                       model_file=init_model)
+             else:
+                self.logger.error("{} does not exists!\n".format(init_model))
+                return -1
         else:
             # start training from a new policy-value net
             self.policy_value_net = PolicyValueNet(self.board_width,
@@ -125,18 +145,7 @@ class TrainPipeline():
         explained_var_new = (1 -
                              np.var(np.array(winner_batch) - new_v.flatten()) /
                              np.var(np.array(winner_batch)))
-        print(("kl:{:.5f},"
-               "lr_multiplier:{:.3f},"
-               "loss:{},"
-               "entropy:{},"
-               "explained_var_old:{:.3f},"
-               "explained_var_new:{:.3f}"
-               ).format(kl,
-                        self.lr_multiplier,
-                        loss,
-                        entropy,
-                        explained_var_old,
-                        explained_var_new))
+        self.logger.info(("kl:{:.5f}, lr_multiplier:{:.3f}, loss:{}, entropy:{}, explained_var_old:{:.3f}, explained_var_new:{:.3f}").format(kl, self.lr_multiplier, loss, entropy, explained_var_old, explained_var_new))
         return loss, entropy
 
     def policy_evaluate(self, n_games=10):
@@ -157,7 +166,7 @@ class TrainPipeline():
                                           is_shown=0)
             win_cnt[winner] += 1
         win_ratio = 1.0*(win_cnt[1] + 0.5*win_cnt[-1]) / n_games
-        print("num_playouts:{}, win: {}, lose: {}, tie:{}".format(
+        self.logger.info("num_playouts:{}, win: {}, lose: {}, tie:{}".format(
                 self.pure_mcts_playout_num,
                 win_cnt[1], win_cnt[2], win_cnt[-1]))
         return win_ratio
@@ -167,18 +176,19 @@ class TrainPipeline():
         try:
             for i in range(self.game_batch_num):
                 self.collect_selfplay_data(self.play_batch_size)
-                print("batch i:{}, episode_len:{}".format(
+                self.logger.info("batch i:{}, episode_len:{}".format(
                         i+1, self.episode_len))
                 if len(self.data_buffer) > self.batch_size:
                     loss, entropy = self.policy_update()
                 # check the performance of the current model,
                 # and save the model params
                 if (i+1) % self.check_freq == 0:
-                    print("current self-play batch: {}".format(i+1))
+                    self.logger.info("current self-play batch: {}".format(i+1))
                     win_ratio = self.policy_evaluate()
                     self.policy_value_net.save_model('./current_policy.model')
+                    self.policy_value_net.save_model('./policy_{}_{}_{}_{}.model'.fromat(self.board_width, self.board_height, self.n_in_row, datetime.datetime.strftime(datetime.datetime.now(), "%Y%m%d%H%M%S")))
                     if win_ratio > self.best_win_ratio:
-                        print("New best policy!!!!!!!!")
+                        self.logger.info("New best policy!!!!!!!!")
                         self.best_win_ratio = win_ratio
                         # update the best_policy
                         self.policy_value_net.save_model('./best_policy.model')
@@ -191,5 +201,5 @@ class TrainPipeline():
 
 
 if __name__ == '__main__':
-    training_pipeline = TrainPipeline()
+    training_pipeline = TrainPipeline(init_model='./best_policy.model')
     training_pipeline.run()
